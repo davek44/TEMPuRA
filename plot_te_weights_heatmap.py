@@ -3,7 +3,7 @@
 from optparse import OptionParser
 import pandas as pd
 import statsmodels.api as sm
-import os, sys, subprocess, ggplot
+import os, sys, subprocess, ggplot, collections
 
 #####################################################################
 # te_feature_weights.py
@@ -40,7 +40,7 @@ def main():
 	for i in range(0,len(consensus_sequence)):
 		if consensus_sequence[i] == 'x':
 			consensus_columns.append(i)
-	quaternary_conversion_dict = {'A':[1,0,0], 'a':[1,0,0], 'C':[0,1,0], 'c':[0,1,0], 'G':[0,0,1], 'g':[0,0,1], '.':[0.25,0.25,0.25], '-':[0.25,0.25,0.25]}
+	quaternary_conversion_dict = {'A':[1,0,0], 'a':[1,0,0], 'C':[0,1,0], 'c':[0,1,0], 'T':[0,0,0], 't':[0,0,0], 'G':[0,0,1], 'g':[0,0,1], '.':[0.25,0.25,0.25], '-':[0.25,0.25,0.25]}
 	df_dict = {}
 	df_dict['Score'] = []
 	for i in range(0, len(consensus_columns)):
@@ -73,7 +73,7 @@ def main():
 				df_dict[position+'_A'].append(letter_score[0])
 				df_dict[position+'_C'].append(letter_score[1])
 				#df_dict[position+'_T'].append(letter_score[2])
-				df_dict[position+'_G'].append(letter_score[3])
+				df_dict[position+'_G'].append(letter_score[2])
 				j += 1
 
 	df = pd.DataFrame(df_dict)
@@ -87,9 +87,9 @@ def main():
 	model_output_file.close()
 	print >> sys.stderr, 'Fit an OLS model and print the summary to %s' %(options.model_output_file)
 
-"""
-	df_dict = {'Position':[], 'Nucleotide':[], 'Weight':[]}
-	plot_output_file = open(options.plot_output_file, 'w')
+	position_weights = collections.defaultdict(list)
+	#for i in range(1,j):
+	#	position_weights[i] = []
 	flag = False
 	for line in open(options.model_output_file, 'r'):
 		if line[0:2] == '==':
@@ -98,16 +98,33 @@ def main():
 			flag = True
 		elif flag:
 			contents = line.split()
-			position, nucleotide = contents[0].split('_')
-			weight = contents[1]
-			df_dict['Position'].append(int(position))
-			df_dict['Nucleotide'].append(nucleotide)
-			df_dict['Weight'].append(float(weight))
+			position = int(contents[0].split('_')[0])
+			weight = float(contents[1])
+			position_weights[position].append(weight)
+
+	df_dict = {'Position':[], 'Nucleotide':[], 'Weight':[]}
+	print '\t'.join(df_dict.keys())
+	for position in position_weights.keys():
+		weight_A, weight_C, weight_G = position_weights[position]
+		weight_T = 0.0
+		nucleotide_weights = [weight_A, weight_C, weight_T, weight_G]
+		nucleotide_order = ['A','C','T','G']
+		min_weight = min(nucleotide_weights)
+		for i in range(0, len(nucleotide_weights)):
+			nucleotide_weights[i] = nucleotide_weights[i] - min_weight
+		max_weight = max(nucleotide_weights)
+		for i in range(0, len(nucleotide_weights)):
+			nucleotide_weights[i] = nucleotide_weights[i]/max_weight
+		for i in range(0, len(nucleotide_weights)):
+			df_dict['Position'].append(position)
+			df_dict['Nucleotide'].append(nucleotide_order[i])
+			df_dict['Weight'].append(nucleotide_weights[i])
+			print '\t'.join([str(position), nucleotide_order[i], str(nucleotide_weights[i])])
 
 	print >> sys.stderr, 'Now plotting the weights of different nucleotides along each position'
-	ggplot.plot('/Users/chinmayshukla/Documents/chinmay/te_tf_motifs/bin/te_weights_plot.r', df_dict, [options.plot_output_file])
+	ggplot.plot('/Volumes/Scratch/Chinmay/TEMPuRA/plot_te_weights_heatmap.r', df_dict, [options.plot_output_file])
 	print >> sys.stderr, 'All Done. Check output files'
-"""
+
 #####################################################################
 # main()
 #####################################################################
