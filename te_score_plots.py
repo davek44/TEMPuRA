@@ -11,9 +11,6 @@ import tempura
 #
 # Given a BED file containing scores and a MSA fasta file, perform a regression
 # on the nucleotides at each position in the MSA against the scores.
-#
-# TODO:
-#  -Handle Consensus headers.
 ################################################################################
 
 
@@ -146,10 +143,6 @@ def main():
         min_weight = min(nucleotide_weights)
         for i in range(0, len(nucleotide_weights)):
             nucleotide_weights[i] = nucleotide_weights[i] - min_weight
-
-        max_weight = max(nucleotide_weights)
-        for i in range(0, len(nucleotide_weights)):
-            nucleotide_weights[i] = nucleotide_weights[i]/max_weight
 
         for i in range(0, len(nucleotide_weights)):
             df_dict['Position'].append(position)
