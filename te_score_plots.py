@@ -177,7 +177,7 @@ def define_consensus(msa_fasta_file, consensus_pct):
                 seq_count += 1
                 for i in range(len(seq)):
                     if seq[i].upper() in valid_nts:
-                        if i >= len(column_counts):
+                        while i >= len(column_counts):
                             column_counts.append(0)
                         column_counts[i] += 1
 
@@ -191,7 +191,7 @@ def define_consensus(msa_fasta_file, consensus_pct):
         seq_count += 1
         for i in range(len(seq)):
             if seq[i].upper() in valid_nts:
-                if i >= len(column_counts):
+                while i >= len(column_counts):
                     column_counts.append(0)
                 column_counts[i] += 1
 
