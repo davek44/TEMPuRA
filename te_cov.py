@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 from optparse import OptionParser
-import glob, os, random, re, shutil, stats, subprocess, sys, pdb, tempfile
+import copy, glob, os, random, re, shutil, stats, subprocess, sys, pdb, tempfile
 import pysam
-import dna, gff, ggplot, te
+import dna, gff, ggplot, te, util
 import tempura
 
 ################################################################################
@@ -20,6 +20,7 @@ def main():
 
     parser.add_option('-l', dest='labels', help='BAM labels (comma separated) for plots')
     parser.add_option('-s', dest='stranded', default=False, action='store_true', help='Seq is stranded so consider orientation [Default: %default]')
+    parser.add_option('-t', dest='threads', default=1, type='int', help='Number of threads to run for multi-TE mode [Default: %default]')
 
     # MSA
     parser.add_option('-c', dest='clean', default=False, action='store_true', help='Clean up removing temp files like the MSA computed for the reads [Default: %default]')
@@ -40,18 +41,49 @@ def main():
         bam_files = args[1:]
 
     ############################################
-    # prep
+    # launch recursively
     ############################################
     if not os.path.isdir(options.out_dir):
         os.mkdir(options.out_dir)
 
+    if dfam_te == '.':
+        processes = []
+        for te_gff in glob.glob('%s/gffs/*.gff' % tempura.dfam_dir):
+            te = os.path.splitext(os.path.split(te_gff)[1])[0]
+
+            cmd_argv = copy.copy(sys.argv)
+
+            # change out_dir
+            i = 0
+            while i < len(cmd_argv) and cmd_argv[i] != '-o':
+                i += 1
+
+            te_out = '%s/%s' % (options.out_dir,te)
+            if i == len(cmd_argv):
+                cmd_argv = cmd_argv[0] + ['-o', te_out] + cmd_argv[1:]
+            else:
+                cmd_argv[i+1] = te_out
+
+            # change dfam_te
+            cmd_argv[-len(bam_files)-1] = te
+
+            cmd = ' '.join(cmd_argv)
+            processes.append(cmd)
+
+        util.exec_par(processes, options.threads, print_cmd=True)
+
+        exit()
+
+    ############################################
+    # prep
+    ############################################
     if options.labels:
         labels = options.labels.split(',')
     else:
         labels = []
 
     for i in range(len(labels), len(bam_files)):
-        labels.append('BAM%d' % (i+1))            
+        labels.append('BAM%d' % (i+1))
 
     ############################################
     # intersect
