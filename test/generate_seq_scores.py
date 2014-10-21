@@ -28,8 +28,8 @@ def main():
         nucleotide = nucleotides[random.randint(0,3)]
         consensus_sequence.append(nucleotide)
     consensus_motif = ''.join(consensus_sequence[:motif_length])
-    print ''.join(consensus_sequence)
-    
+    print consensus_motif
+
     for n in range(num_seqs):
         # mutate sequence
         seq = ''

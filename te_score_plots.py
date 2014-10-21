@@ -104,8 +104,6 @@ def main():
     df = pd.DataFrame(df_dict)
     score = df['Score']
     X = df.drop('Score', axis=1)
-    print X
-    print score
     print >> sys.stderr, 'Read in all the sequences and scores. Now fitting the model'
     mod = sm.OLS(score, X)
     res = mod.fit()
@@ -133,7 +131,7 @@ def main():
                 position_weights[position].append(weight)
 
     df_dict = {'Position':[], 'Nucleotide':[], 'Weight':[]}
-    print '\t'.join(df_dict.keys())
+    #print '\t'.join(df_dict.keys())
     for position in position_weights.keys():
         weight_A, weight_C, weight_G = position_weights[position]
         weight_T = 0.0
@@ -148,10 +146,11 @@ def main():
             df_dict['Position'].append(position)
             df_dict['Nucleotide'].append(nucleotide_order[i])
             df_dict['Weight'].append(nucleotide_weights[i])
-            print '\t'.join([str(position), nucleotide_order[i], str(nucleotide_weights[i])])
+            #print '\t'.join([str(position), nucleotide_order[i], str(nucleotide_weights[i])])
 
     print >> sys.stderr, 'Now plotting the weights of different nucleotides along each position'
-    ggplot.plot('%s/te_score_plots.r' % tempura.r_dir, df_dict, [options.plot_output_file])
+    #ggplot.plot('%s/te_score_plots.r' % tempura.r_dir, df_dict, [options.plot_output_file])
+    ggplot.plot('/Users/chinmayshukla/Documents/Research/TEMPuRA/r/te_score_plots.r', df_dict, [options.plot_output_file])
     print >> sys.stderr, 'All Done. Check output files'
 
 
