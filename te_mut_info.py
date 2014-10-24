@@ -102,8 +102,7 @@ def main():
             nt = seq[seq_i].upper()
             df_mi[position].append(nt)
 
-    r_script = '/Users/chinmayshukla/Documents/Research/Sandbox-TEMPuRA/bin/r/te_mut_info.r'
-    ggplot.plot(r_script, df_mi, [options.output_pre])
+    ggplot.plot('%s/te_mut_info.r' % tempura.r_dir, df_mi, [options.output_pre])
 ################################################################################
 # define_consensus
 #

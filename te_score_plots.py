@@ -149,8 +149,7 @@ def main():
             #print '\t'.join([str(position), nucleotide_order[i], str(nucleotide_weights[i])])
 
     print >> sys.stderr, 'Now plotting the weights of different nucleotides along each position'
-    #ggplot.plot('%s/te_score_plots.r' % tempura.r_dir, df_dict, [options.plot_output_file])
-    ggplot.plot('/Users/chinmayshukla/Documents/Research/TEMPuRA/r/te_score_plots.r', df_dict, [options.plot_output_file])
+    ggplot.plot('%s/te_score_plots.r' % tempura.r_dir, df_dict, [options.plot_output_file])
     print >> sys.stderr, 'All Done. Check output files'
 
 
