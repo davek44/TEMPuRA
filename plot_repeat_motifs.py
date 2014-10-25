@@ -50,8 +50,8 @@ def main():
 	# Create a PoSSuM Index from the temporary
 	# file created above
 	############################################
-	subprocess.call('mkvtree -db %s -indexname msa_index -dna -tis -suf -lcp -skp -v', shell=True)
-	subprocess.call('possumfreqs -db %s > frequencies.txt' % ,shell=True)
+	subprocess.call('mkvtree -db %s -indexname msa_index -dna -tis -suf -lcp -skp -v' % msa_sequences_file_name, shell=True)
+	subprocess.call('possumfreqs -db %s > frequencies.txt' % msa_sequences_file_name ,shell=True)
 	subprocess.call('possumdist -pr %s -dna -freq frequencies.txt -pdis dist.gz' % options.possum_library, shell=True)
 	subprocess.call('possumsearch -pr %s -dna -db %s -freq frequencies.txt -lazy -esa -pval 1e-6 -fn -rc -format tabs > msa_motifs.txt' %(options.possum_library, msa_sequences_file_name), shell=True)
 	subprocess.call('possum2gff.py msa_motifs.txt > msa_motifs.gff', shell=True)
