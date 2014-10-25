@@ -2,32 +2,39 @@
 from optparse import OptionParser
 import copy, glob, os, random, re, shutil, stats, subprocess, sys, pdb, tempfile
 import pysam
-import dna, gff, ggplot, te, util
+import bam_fragments, dna, gff, ggplot, te, util
 import tempura
 
 ################################################################################
 # te_cov.py
 #
 # Plot BAM coverage across a TE family.
+#
+# TODO:
+#  (1) Fix paired end reads w/ same qname.
+#      (a) It's a mess. You can't hash which read it is in the intersectBed
+#           because you have to use -split -bed. But if the paired reads have
+#           the same qname, it will get confused about the orientation they
+#           should be in.
 ################################################################################
 
 ################################################################################
 # main
 ################################################################################
 def main():
-    usage = 'usage: %prog [options] <dfam_te> <bam1> ... <bam2> ... <bamN>'
+    usage = 'usage: %prog [options] <bam1> ... <bam2> ... <bamN>'
     parser = OptionParser(usage)
 
     parser.add_option('-l', dest='labels', help='BAM labels (comma separated) for plots')
     parser.add_option('-s', dest='stranded', default=False, action='store_true', help='Seq is stranded so consider orientation [Default: %default]')
-    parser.add_option('-t', dest='threads', default=1, type='int', help='Number of threads to run for multi-TE mode [Default: %default]')
+    parser.add_option('-t', dest='te_gff', default='%s/te.gff'%tempura.dfam_dir, help='TE GFF (use a single TE GFF if desired) [Default: %default]')
 
     # MSA
     parser.add_option('-c', dest='clean', default=False, action='store_true', help='Clean up removing temp files like the MSA computed for the reads [Default: %default]')
     parser.add_option('-m', dest='msa_saved', default=False, action='store_true', help='MSAs computed by HMMer are already done and in the output directory [Default: %default]')
 
     # limitations
-    parser.add_option('-i', dest='min_cov', default=100, type='int', help='Minimum number of reads/nt to proceed after intersectBed [Default: %default]')
+    parser.add_option('-n', dest='num_plots', default=100, type='int', help='Number of plots to make [Default: %default]')
     parser.add_option('-a', dest='max_reads', default=10000, type='int', help='Maximum number of reads to hmmalign [Default: %default]')
 
     parser.add_option('-o', dest='out_dir', default='te_cov', help='Output directory [Default: %default]')
@@ -35,48 +42,16 @@ def main():
     (options,args) = parser.parse_args()
 
     if len(args) < 2:
-        parser.error('Must provide DFAM TE family and BAM')
+        parser.error('Must provide BAM file(s)')
     else:
-        dfam_te = args[0]
-        bam_files = args[1:]
-
-    ############################################
-    # launch recursively
-    ############################################
-    if not os.path.isdir(options.out_dir):
-        os.mkdir(options.out_dir)
-
-    if dfam_te == '.':
-        processes = []
-        for te_gff in glob.glob('%s/gffs/*.gff' % tempura.dfam_dir):
-            te = os.path.splitext(os.path.split(te_gff)[1])[0]
-
-            cmd_argv = copy.copy(sys.argv)
-
-            # change out_dir
-            i = 0
-            while i < len(cmd_argv) and cmd_argv[i] != '-o':
-                i += 1
-
-            te_out = '%s/%s' % (options.out_dir,te)
-            if i == len(cmd_argv):
-                cmd_argv = cmd_argv[0] + ['-o', te_out] + cmd_argv[1:]
-            else:
-                cmd_argv[i+1] = te_out
-
-            # change dfam_te
-            cmd_argv[-len(bam_files)-1] = te
-
-            cmd = ' '.join(cmd_argv)
-            processes.append(cmd)
-
-        util.exec_par(processes, options.threads, print_cmd=True)
-
-        exit()
+        bam_files = args
 
     ############################################
     # prep
     ############################################
+    if not os.path.isdir(options.out_dir):
+        os.mkdir(options.out_dir)
+
     if options.labels:
         labels = options.labels.split(',')
     else:
@@ -88,38 +63,63 @@ def main():
     ############################################
     # intersect
     ############################################
-    bam_fwd_coverages = []
-    bam_rev_coverages = []
+    bam_te_coverages = []
     for i in range(len(bam_files)):
         # make dir
         bam_dir = '%s/bam%d' % (options.out_dir,i+1)
         if not os.path.isdir(bam_dir):
             os.mkdir(bam_dir)
 
-        # compute cov
-        cov_fwd, cov_rev = compute_bam_cov(dfam_te, bam_files[i], bam_dir, options.stranded, options.min_cov, options.max_reads, options.msa_saved, options.clean)
+        # compute coverage
+        te_bam_cov = compute_bam_cov(options.te_gff, bam_files[i], bam_dir, options.stranded, options.max_reads, options.msa_saved, options.clean)
 
-        # smooth
-        cov_fwd_smooth = kernel_smooth(cov_fwd)
-        cov_rev_smooth = kernel_smooth(cov_rev)
+        # process coverage
+        bam_frags = float(bam_fragments.count(bam_files[i]))
+        for te_key in te_bam_cov:
+            # smooth
+            te_bam_cov[te_key] = kernel_smooth(te_bam_cov[te_key])
 
-        # add pseudocounts
-        for i in range(len(cov_fwd_smooth)):
-            cov_fwd_smooth[i] += 1
-        for i in range(len(cov_rev_smooth)):
-            cov_rev_smooth[i] += 1
+            # add pseudocounts (why?)
+            #for i in range(len(te_cov_smooth[te_key])):
+            #    te_cov_smooth[te_key][i] += 1
+
+            # normalize            
+            for c in range(len(te_bam_cov[te_key])):
+                te_bam_cov[te_key][c] /= bam_frags
 
         # save
-        bam_fwd_coverages.append(cov_fwd_smooth)
-        bam_rev_coverages.append(cov_rev_smooth)
+        bam_te_coverages.append(te_bam_cov)
+
+    ############################################
+    # choose top TEs to plot
+    ############################################
+    te_plot_scores = []
+    
+    all_tes = set()
+    for i in range(len(bam_te_coverages)):
+        for te_key in bam_te_coverages[i]:
+            all_tes.add(te_key)
+
+    # this must have nothing, right?
+    print 'len(all_tes) = %d' % len(all_tes)
+
+    for te_key in all_tes:
+        plot_score = max([0]+[max([0]+bam_te_coverages[i].get(te_key,[])) for i in range(len(bam_te_coverages))])
+        te_plot_scores.append((plot_score, te_key))
+
+    te_plot_scores.sort(reverse=True)
+
+    plot_tes = [te_key for (plot_score, te_key) in te_plot_scores[:options.num_plots]]
+
 
     ############################################
     # plot
     ############################################
     print >> sys.stderr, 'Plotting.'
     
-    plot_coverage(bam_fwd_coverages, labels, dfam_te, '%s/coverage_forward.pdf' % options.out_dir, reverse=False)
-    plot_coverage(bam_rev_coverages, labels, dfam_te, '%s/coverage_reverse.pdf' % options.out_dir, reverse=True)
+    for dfam_te, orient in plot_tes:
+        print >> sys.stderr, '\t%s %s' % (dfam_te, orient)
+        plot_coverage(bam_te_coverages, dfam_te, orient, labels, options.out_dir)
 
     # weblogo?
     '''
@@ -140,49 +140,45 @@ def main():
 #
 # Compute coverage across TE seqeunces from a BAM file.
 ################################################################################
-def compute_bam_cov(dfam_te, bam_file, bam_dir, stranded, min_cov, max_reads, msa_saved, clean):
+def compute_bam_cov(te_gff, bam_file, bam_dir, stranded, max_reads, msa_saved, clean):
     print >> sys.stderr, 'Computing %s coverage...' % bam_file
 
     if msa_saved:
-        print >> sys.stderr, '\tNo %s renormalization with saved MSA.' % dfam_te
-        renorm_fwd = 1.0
-        renorm_rev = 1.0
+        print >> sys.stderr, '\tNo renormalization with saved MSA.'
+
+        te_renorm = {}
+
+        te_re = re.compile('%s/(.+)_(fwd|rev)\.msa' % bam_dir)
+        for msa_file in glob.glob('%s/*_*.msa' % bam_dir):
+            te_match = te_re.search(msa_file)
+
+            te = te_match.group(1)
+            orient = te_match.group(2)
+
+            te_renorm[(te,orient)] = 1.0
 
     else:
         # hash reads by TE
-        print >> sys.stderr, '\tHashing reads by %s.' % dfam_te
-        te_reads = hash_te_reads(dfam_te, bam_file)
+        print >> sys.stderr, '\tHashing reads by repeat.'
+        read_tes = hash_te_reads(te_gff, bam_file)
 
-        # how long is the TE?
-        hmm_file = '%s/hmms/%s.hmm' % (tempura.dfam_dir, dfam_te)
-        for line in open(hmm_file):
-            if line.startswith('LENG'):
-                te_length = int(line[5:])
-                break
+        # make TE read fasta files
+        print >> sys.stderr, '\tMaking read fasta files.'
+        te_renorm = make_te_read_fastas(te_gff, bam_file, read_tes, bam_dir, stranded, max_reads)
 
-        # do we see enough reads/len
-        if len(te_reads)/float(te_length) < min_cov:
-            renorm_fwd = 0
-            renorm_rev = 0
-        else:
-            # make TE read fasta files
-            print >> sys.stderr, '\tMaking %s read fasta files.' % dfam_te
-            renorm_fwd, renorm_rev = make_te_read_fastas(bam_file, te_reads, bam_dir, stranded, max_reads)
+    te_bam_cov = {}
+    for dfam_te, orient in te_renorm:
+        fasta_file = '%s/%s_%s.fa' % (bam_dir, dfam_te, orient)
 
-    # compute coverage and re-normalize forward and reverse
-    bam_cov_fwd = cov_renorm(dfam_te, '%s/fwd.fa' % bam_dir, renorm_fwd, msa_saved)
-    if stranded:
-        bam_cov_rev = cov_renorm(dfam_te, '%s/rev.fa' % bam_dir, renorm_rev, msa_saved)
-    else:
-        bam_cov_rev = []   # same as if we decided not to align it
+        # compute coverage and re-normalize
+        te_bam_cov[(dfam_te,orient)] = cov_renorm(dfam_te, fasta_file, te_renorm[(dfam_te,orient)], msa_saved)
 
-    rm_if_is('%s/fwd.fa' % bam_dir)
-    rm_if_is('%s/rev.fa' % bam_dir)
-    if clean:
-        rm_if_is('%s/fwd.msa' % bam_dir)
-        rm_if_is('%s/rev.msa' % bam_dir)
+        # consider cleaning
+        rm_if_is(fasta_file)
+        if clean:
+            rm_if_is('%s/%s_%s.msa' % (bam_dir, dfam_te, orient))
 
-    return bam_cov_fwd, bam_cov_rev
+    return te_bam_cov
 
 
 ################################################################################
@@ -271,19 +267,18 @@ def kernel_smooth(cov):
 # returning a dict mapping them to strand information.
 #
 # Input
-#  dfam_te:
 #  bam_file:
+#  te_gff:
 #  min_overlap:
 #
 # Output
-#  te_reads: Dict mapping read header to a tuple of read strand and TE strand.
+#  te_reads:     Dict mapping read header to a dict mapping repeats to tuples of
+#                 read strand and TE strand.
 ################################################################################
-def hash_te_reads(dfam_te, bam_file, min_overlap=5):
+def hash_te_reads(te_gff, bam_file, min_overlap=5):
     te_reads = {}
-
-    dfam_gff = '%s/gffs/%s.gff' % (tempura.dfam_dir, dfam_te)
-
-    p = subprocess.Popen('intersectBed -wo -bed -split -sorted -abam %s -b %s' % (bam_file, dfam_gff), shell=True, stdout=subprocess.PIPE)
+    
+    p = subprocess.Popen('intersectBed -wo -bed -split -sorted -abam %s -b %s' % (bam_file, te_gff), shell=True, stdout=subprocess.PIPE)
     for line in p.stdout:
         a = line.split('\t')
 
@@ -291,12 +286,13 @@ def hash_te_reads(dfam_te, bam_file, min_overlap=5):
         rstrand = a[5]
 
         tstrand = a[18]
+        dfam_te = gff.gtf_kv(a[20])['dfam']
 
         overlap = int(a[-1])
 
         # hash the overlap and the strands
         if overlap >= min_overlap:
-            te_reads[rheader] = (rstrand,tstrand)
+            te_reads.setdefault(rheader,{})[dfam_te] = (rstrand, tstrand)
     p.communicate()
 
     return te_reads
@@ -311,53 +307,67 @@ def hash_te_reads(dfam_te, bam_file, min_overlap=5):
 # as we encounter their alignments on the proper strand. Print only up to the
 # max number of reads, but count everything, so we can't renormalize. Finally,
 # filter the fasta files with too few reads.
+#
+# If stranded==False, just use the 'fwd' file.
+#
+# Output
+#  te_renorm: dict mapping (dfam_te,orient) tuples to a renormalization factor.
 ################################################################################
-def make_te_read_fastas(bam_file, te_reads, out_dir, stranded, max_reads):
+def make_te_read_fastas(te_gff, bam_file, read_tes, out_dir, stranded, max_reads):
     # open TE read fasta files
-    fasta_fwd_out = open('%s/fwd.fa' % out_dir, 'w')
-    fasta_rev_out = open('%s/rev.fa' % out_dir, 'w')
+    te_fastas = {}
+    for line in open(te_gff):
+        a = line.split('\t')
+        dfam_te = gff.gtf_kv(a[8])['dfam']
+        if not (dfam_te,'fwd') in te_fastas:
+            te_fastas[(dfam_te,'fwd')] = open('%s/%s_fwd.fa' % (out_dir,dfam_te), 'w')
+            te_fastas[(dfam_te,'rev')] = open('%s/%s_rev.fa' % (out_dir,dfam_te), 'w')
 
     # initialize counters for total reads
-    total_fwd = 0
-    total_rev = 0
-
-    reads_printed = set()
+    te_totals = {}
+    for dfam_te, orient in te_fastas:
+        te_totals[dfam_te, orient] = 0
 
     # print reads to fasta files
     for aligned_read in pysam.Samfile(bam_file, 'rb'):
-        if aligned_read.qname in te_reads and (aligned_read.qname,aligned_read.is_read1) not in reads_printed:
-            (rstrand, tstrand) = te_reads[aligned_read.qname]
+        this_read_tes = read_tes.get(aligned_read.qname,{})
 
-            # only print if we match the read strand
-            if (aligned_read.is_reverse and rstrand == '-') or (not aligned_read.is_reverse and rstrand == '+'):
-                # TE determines reversal
-                if tstrand == '+':
-                    rseq = aligned_read.seq
-                else:
-                    rseq = dna.rc(aligned_read.seq)
+        for dfam_te in this_read_tes.keys():
+            if this_read_tes[dfam_te] != None:
+                (rstrand, tstrand) = this_read_tes[dfam_te]
 
-                # count, and print
-                if not stranded or rstrand == tstrand:
-                    total_fwd += 1
-                    if total_fwd < max_reads:
-                        print >> fasta_fwd_out, '>%s\n%s' % (aligned_read.qname,rseq)
-                else:
-                    total_rev += 1
-                    if total_rev < max_reads:
-                        print >> fasta_rev_out, '>%s\n%s' % (aligned_read.qname,rseq)
+                # only print if we match the read strand
+                if (aligned_read.is_reverse and rstrand == '-') or (not aligned_read.is_reverse and rstrand == '+'):
+                    # TE determines reversal
+                    if tstrand == '+':
+                        rseq = aligned_read.seq
+                    else:
+                        rseq = dna.rc(aligned_read.seq)
 
-                # save so we won't print again
-                reads_printed.add((aligned_read.qname,aligned_read.is_read1))
+                    # count, and print
+                    if not stranded or rstrand == tstrand:
+                        te_totals[(dfam_te,'fwd')] += 1
+                        if te_totals[(dfam_te,'fwd')] < max_reads:
+                            print >> te_fastas[(dfam_te,'fwd')], '>%s\n%s' % (aligned_read.qname,rseq)
+                    else:
+                        te_totals[(dfam_te,'rev')] += 1
+                        if te_totals[(dfam_te,'rev')] < max_reads:
+                            print >> te_fastas[(dfam_te,'rev')], '>%s\n%s' % (aligned_read.qname,rseq)
 
-    # close fasta files
-    fasta_fwd_out.close()    
-    fasta_rev_out.close()
+                    # specify printed
+                    this_read_tes[dfam_te] = None
 
-    # return renormalization factors    
-    renorm_fwd = max(1.0, total_fwd/float(max_reads))
-    renorm_rev = max(1.0, total_rev/float(max_reads))
+    # post-process fasta files
+    te_renorm = {}
+    for dfam_te, orient in te_fastas:
+        # close
+        te_fastas[(dfam_te, orient)].close()
 
-    return renorm_fwd, renorm_rev
+        # return renormalization factors
+        if te_totals[(dfam_te,orient)] > 10:
+            te_renorm[(dfam_te,orient)] = max(1.0, te_totals[(dfam_te,orient)]/float(max_reads))
+
+    return te_renorm
 
 
 ################################################################################
@@ -365,23 +375,29 @@ def make_te_read_fastas(bam_file, te_reads, out_dir, stranded, max_reads):
 #
 # Plot normalized coverage across the TE for each of the BAM files.
 ################################################################################
-def plot_coverage(bam_coverages, labels, dfam_te, out_pdf, reverse=False):
-    df = {'indexes':[], 'coverage':[], 'data':[]}
-    for i in range(len(bam_coverages)):
-        if len(bam_coverages[i]) > 0:
-            df['indexes'] += range(len(bam_coverages[i]))
-            df['data'] += [labels[i]]*len(bam_coverages[i])
+def plot_coverage(bam_te_coverages, dfam_te, orient, labels, out_dir):
 
-            cov_sum = float(sum(bam_coverages[i]))
-            final_cov = [c/cov_sum for c in bam_coverages[i]]
+    df = {'indexes':[], 'coverage':[], 'coverage_norm':[], 'data':[]}
+    for i in range(len(bam_te_coverages)):        
+        bam_coverage = bam_te_coverages[i].get((dfam_te,orient),[])
 
-            if reverse:
-                df['coverage'] += final_cov[::-1]
+        if len(bam_coverage) > 0:
+            df['indexes'] += range(len(bam_coverage))
+            df['data'] += [labels[i]]*len(bam_coverage)
+
+            cov_sum = float(sum(bam_coverage))
+            bam_coverage_norm = [c/cov_sum for c in bam_coverage]
+
+            if orient == 'rev':
+                df['coverage'] += bam_coverage[::-1]
+                df['coverage_norm'] += bam_coverage_norm[::-1]
             else:
-                df['coverage'] += final_cov
+                df['coverage'] += bam_coverage
+                df['coverage_norm'] += bam_coverage_norm
 
     if len(df['indexes']) > 0:
-        ggplot.plot('%s/te_cov.r' % tempura.r_dir, df, [dfam_te, out_pdf])
+        out_pre = '%s/%s_%s_cov' % (out_dir, dfam_te, orient)
+        ggplot.plot('%s/te_cov.r' % tempura.r_dir, df, [dfam_te, out_pre])
 
 
 ################################################################################
