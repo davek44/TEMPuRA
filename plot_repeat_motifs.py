@@ -4,7 +4,7 @@ from optparse import OptionParser
 import subprocess, tempfile
 
 ################################################################################
-# te_cov.py
+# plot_repeat_motifs.py
 #
 # plot occurrences of a known motif along a repeat, so we can compare to the 
 # regression coefficients and mutual information
