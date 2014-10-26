@@ -16,6 +16,8 @@ import resource
 # to only include repeats with > 1000 occurrences and a certain 
 # minimum coverage in the BED file.
 #
+# To Do:
+#	- Reduce memory footprint (currently - 32 GB)
 #####################################################################
 
 def main():
@@ -24,8 +26,8 @@ def main():
 	parser.add_option('-o', dest='output_dir', default='te_score_cov', help='The directory in which you want to write the output files. [Default: %default]')
 	parser.add_option('-c', dest='control_files', help='Control files for the input BAM files. [Default: %default]')
 	parser.add_option('-l', dest='log', default=False, action='store_true', help='log2 coverage [Default: %default]')
-	parser.add_option('-n', dest='min_num_repeats', type='int', help='The minimum of instances of a repeat needed to report it as a seperate BED file. [Default: %default]')
-	parser.add_option('-s', dest='min_score', type='float', help='The minimum average score of a repeat needed to report it as a seperate BED file. [Default: %default]')
+	parser.add_option('-n', dest='min_num_repeats', default = -1, type='int', help='The minimum of instances of a repeat needed to report it as a seperate BED file. [Default: %default]')
+	parser.add_option('-s', dest='min_score', type='float', default = -1.0, help='The minimum average score of a repeat needed to report it as a seperate BED file. [Default: %default]')
 	(options, args) = parser.parse_args()
 
 	if len(args)!=2:
@@ -122,7 +124,7 @@ def main():
 						cov = cov / coverage_control[feature_id][i]
 				feature_scores.append(cov)
 			score = numpy.mean(feature_scores)
-		out_line = '\t'.join([chromosome, str(start), str(end), strand, name, str(score)])
+		out_line = '\t'.join([chromosome, str(start), str(end), name, str(score), strand])
 		print >> te_score_file, out_line
 
 	te_score_file.close()
@@ -136,15 +138,9 @@ def main():
 	# number of instances and an average minimum score.
 	######################################################################
 
-	if options.min_score:
-		least_score = options.min_score
-	else:
-		least_score = -1
-	if options.min_num_repeats:
-		least_lines = options.min_num_repeats
-	else:
-		least_lines = -1
-
+	least_score = options.min_score
+	least_lines = options.min_num_repeats
+	
 	te_score_dir = options.output_dir
 	split_master(te_score_fd, te_score_dir, 'repeats', least_score, least_lines)
 	memory_in_use()
@@ -279,7 +275,7 @@ def split_master(master_file_name, master_dir, identifier, least_score, least_li
 	repeat_families = {}
 	for line in open(master_file_name, 'r'):
 		contents = line.split('\t')
-		repeat_family = contents[4].split(';')[split_contents].split('"')[1]
+		repeat_family = contents[3].split(';')[split_contents].split('"')[1]
 		if len(repeat_family.split('/')) > 1:
 			repeat_family = repeat_family.split('/')[1]
 		if repeat_family not in repeat_families:
@@ -313,7 +309,7 @@ def split_master(master_file_name, master_dir, identifier, least_score, least_li
 		num_lines = 0
 		bed_file = open(bed_file_name, 'r')
 		for line in bed_file:
-			score = float(line.split('\t')[-1])
+			score = float(line.split('\t')[4])
 			scores.append(score)
 			num_lines +=1
 		bed_file.close()
@@ -338,14 +334,14 @@ def split_master(master_file_name, master_dir, identifier, least_score, least_li
 
 	mean_families_score = numpy.mean(all_families_score)
 	mean_families_lines = numpy.mean(all_families_lines)
-	if least_score!= -1:
-		min_score = least_score
-	else:
+	if least_score == -1:
 		min_score = mean_families_score
-	if least_lines!= -1:
-		min_num_repeats = least_lines
 	else:
+		min_score = least_score
+	if least_lines == -1:
 		min_num_repeats = mean_families_lines
+	else:
+		min_num_repeats = least_lines
 
 	###################################
 	# Remove the BED files not matching
@@ -369,7 +365,6 @@ def split_master(master_file_name, master_dir, identifier, least_score, least_li
 
 	print >> sys.stderr, 'Removed the %s with average score less than %f' %(identifier, round(min_score,2))
 	print >> sys.stderr, 'Removed the %s with less than %d instances' %(identifier, round(min_num_repeats,2))
-
 ################################################################################
 # memory_in_use
 # 
